@@ -16,6 +16,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import ORJSONResponse
 
+from onyx_core import security_policy
 from onyx_core.config import get_config
 from onyx_core.services import ElasticsearchService, MongoDBService, RedisService
 
@@ -57,6 +58,20 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     Initializes all database connections on startup and closes them on shutdown.
     """
     config = get_config()
+
+    # --- Security policy: abort in production on placeholder secrets, log in development ---
+    findings = security_policy.audit(
+        env=config.env, debug=config.debug, jwt_secret=config.jwt_secret,
+        secret_key=config.secret_key, cors_origins=config.api_cors_origins,
+        service_passwords={
+            "REDIS_PASSWORD": config.redis.password,
+            "MONGODB_PASSWORD": config.mongodb.password,
+            "ELASTICSEARCH_PASSWORD": config.elasticsearch.password,
+        },
+    )
+    for f in findings:
+        logger.warning("onyx.security", severity=f.severity, key=f.key, message=f.message)
+    security_policy.enforce(findings, config.env)
 
     # --- Startup ---
     logger.info(
@@ -318,21 +333,18 @@ def create_app() -> FastAPI:
     )
 
     # --- CORS (v4.0-APEX: environment-aware) ---
-    cors_origins = config.api_cors_origins if config.api_cors_origins else ["*"]
-    # In development, allow all origins for rapid iteration
-    if config.debug or config.env == "development":
-        cors_origins = ["*"]
+    # Wildcards are never served; credentials only with an explicit origin list.
+    cors_origins, cors_credentials = security_policy.resolve_cors(config.api_cors_origins, config.env)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=cors_origins,
-        allow_credentials=True if "*" not in cors_origins else False,
-        allow_methods=["*"],
-        allow_headers=["*"],
-        expose_headers=["*"],
+        allow_credentials=cors_credentials,
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        allow_headers=["Authorization", "Content-Type", "X-API-Key", "Accept"],
     )
 
     # --- Register Routers ---
-    from onyx_api.routers import health, iocs, dashboard, auth, taxii, internal, nlp, agent, chat, mitre, reports, actors
+    from onyx_api.routers import health, iocs, dashboard, auth, taxii, internal, nlp, agent, chat, mitre, reports, actors, engines
     from onyx_api.routers import websocket_hub
 
     app.include_router(health.router, prefix="/api/v1", tags=["Health"])
@@ -348,6 +360,7 @@ def create_app() -> FastAPI:
     app.include_router(internal.router, prefix="/api/v1", tags=["Internal"])
     app.include_router(chat.router, prefix="/api/v1")
     app.include_router(reports.router, prefix="/api/v1", tags=["Reports"])
+    app.include_router(engines.router, prefix="/api/v1")
 
     # v4.0-APEX: WebSocket Event Bus
     app.include_router(websocket_hub.router, tags=["WebSocket"])

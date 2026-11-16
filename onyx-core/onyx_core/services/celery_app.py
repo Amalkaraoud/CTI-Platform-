@@ -10,11 +10,18 @@ import os
 
 from celery import Celery
 
+def _redis_url() -> str:
+    """Broker URL from the environment. No credential is embedded in the code."""
+    pw = os.getenv("REDIS_PASSWORD", "")
+    host = os.getenv("REDIS_HOST", "redis")
+    return f"redis://:{pw}@{host}:6379/1" if pw else f"redis://{host}:6379/1"
+
+
 # Create Celery app
 celery = Celery(
     "onyx",
-    broker=os.getenv("CELERY_BROKER_URL", "redis://:onyx_redis_secret_2026@redis:6379/1"),
-    backend=os.getenv("CELERY_RESULT_BACKEND", "redis://:onyx_redis_secret_2026@redis:6379/1"),
+    broker=os.getenv("CELERY_BROKER_URL", _redis_url()),
+    backend=os.getenv("CELERY_RESULT_BACKEND", _redis_url()),
 )
 
 # Configuration

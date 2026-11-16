@@ -1,0 +1,16 @@
+name: ci
+on:
+  push:
+  pull_request:
+jobs:
+  engines:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install pytest
+      - name: Engine, security-policy and demo-server tests (stdlib + pytest only)
+        run: python -m pytest onyx-core/tests/unit/test_engines_smoke.py onyx-core/tests/unit/test_security_policy.py onyx-api/tests -q
+      - name: Demo builds
+        run: python demo/build_demo.py

@@ -27,7 +27,7 @@ class ElasticsearchConfig(BaseSettings):
     port: int = Field(default=9200)
     scheme: str = Field(default="http")
     user: str = Field(default="elastic")
-    password: str = Field(default="onyx_elastic_secret_2026")
+    password: str = Field(default="", description="Required: set ELASTICSEARCH_PASSWORD")
     ioc_index: str = Field(default="onyx-iocs")
     threats_index: str = Field(default="onyx-threats")
     audit_index: str = Field(default="onyx-audit")
@@ -48,7 +48,7 @@ class MongoDBConfig(BaseSettings):
     port: int = Field(default=27017)
     database: str = Field(default="onyx_cti")
     user: str = Field(default="onyx_admin")
-    password: str = Field(default="onyx_mongo_secret_2026")
+    password: str = Field(default="", description="Required: set MONGODB_PASSWORD")
     auth_source: str = Field(default="admin")
 
     @property
@@ -66,7 +66,7 @@ class RedisConfig(BaseSettings):
 
     host: str = Field(default="redis")
     port: int = Field(default=6379)
-    password: str = Field(default="onyx_redis_secret_2026")
+    password: str = Field(default="", description="Required: set REDIS_PASSWORD")
     db_cache: int = Field(default=0)
     db_queue: int = Field(default=1)
     db_sessions: int = Field(default=2)
@@ -184,8 +184,8 @@ class OnyxConfig(BaseSettings):
     )
 
     env: str = Field(default="development")
-    debug: bool = Field(default=True)
-    secret_key: str = Field(default="change-me-to-a-64-char-random-hex-string")
+    debug: bool = Field(default=False)
+    secret_key: str = Field(default="", description="Required: python scripts/gen_env.py")
     log_level: str = Field(default="INFO")
     timezone: str = Field(default="UTC")
 
@@ -197,7 +197,7 @@ class OnyxConfig(BaseSettings):
     api_rate_limit: str = Field(default="100/minute")
 
     # JWT
-    jwt_secret: str = Field(default="change-me-to-another-64-char-random-hex-string")
+    jwt_secret: str = Field(default="", description="Required: python scripts/gen_env.py")
     jwt_algorithm: str = Field(default="HS256")
     jwt_expiration_minutes: int = Field(default=1440)
 

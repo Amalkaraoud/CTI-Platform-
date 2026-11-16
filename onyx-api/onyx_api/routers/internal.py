@@ -1,8 +1,9 @@
 from typing import Any, List
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 import os
 
+from onyx_api.auth.jwt import Role, UserPayload, require_role
 from onyx_core.services import MongoDBService
 
 router = APIRouter()
@@ -11,7 +12,10 @@ class SeedPayload(BaseModel):
     objects: List[Any]
 
 @router.post("/_internal/seed", summary="Exhibition Mode Topology Seeder")
-async def seed_topology(payload: SeedPayload) -> dict[str, Any]:
+async def seed_topology(
+    payload: SeedPayload,
+    _admin: UserPayload = Depends(require_role(Role.ADMIN)),
+) -> dict[str, Any]:
     """
     Direct memory injection for standalone exhibition mode.
     Bypasses Elasticsearch/Redis and populates STIX states directly.

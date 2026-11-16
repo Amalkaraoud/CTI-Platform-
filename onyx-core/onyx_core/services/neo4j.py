@@ -9,7 +9,7 @@ class Neo4jService:
     def __init__(self):
         self.uri = os.getenv("NEO4J_URI", "bolt://localhost:7687")
         self.user = os.getenv("NEO4J_USER", "neo4j")
-        self.password = os.getenv("NEO4J_PASSWORD", "onyx_graph_secret_2026")
+        self.password = os.getenv("NEO4J_PASSWORD", "")
         self._driver: Optional[Driver] = None
 
     def connect(self):

@@ -32,6 +32,7 @@ from jose import JWTError, jwt
 from passlib.context import CryptContext
 from pydantic import BaseModel, Field
 
+from onyx_core import security_policy as _sp
 from onyx_core.config import get_config
 
 # ============================================================================
@@ -39,6 +40,11 @@ from onyx_core.config import get_config
 # ============================================================================
 _cfg = get_config()
 JWT_SECRET = _cfg.jwt_secret
+if _sp.is_weak_secret(JWT_SECRET):
+    if _sp.is_production(_cfg.env):
+        raise _sp.InsecureConfiguration("ONYX_JWT_SECRET is missing, a placeholder or too short. "
+                                        "Run: python scripts/gen_env.py")
+    JWT_SECRET = _sp.generate_secret()   # development: ephemeral key, tokens die on restart
 JWT_ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60
 REFRESH_TOKEN_EXPIRE_DAYS = 30
@@ -218,27 +224,20 @@ def hash_api_key(key: str) -> str:
 # FastAPI Dependencies — Auth Extractors
 # ============================================================================
 
-# Hardcoded default admin for bootstrapping (production: use MongoDB)
-_DEFAULT_USERS = {
-    "admin": {
-        "id": "user-admin-001",
-        "username": "admin",
-        "password_hash": "$2b$12$Z0H99D7qM8aQ81yQ9S.K.OUv3B5N.v/gP6n9J3Z5I9M7q8Z9C8K.O", # onyx_admin_2026!
-        "role": Role.ADMIN,
-        "email": "admin@onyx.local",
-        "is_active": True,
-        "created_at": datetime.now(timezone.utc).isoformat(),
-    },
-    "analyst": {
-        "id": "user-analyst-001",
-        "username": "analyst",
-        "password_hash": "$2b$12$E/t8gN8v5RMWJp6/P1wB2eM.n7H57L9O8aG4vXvJ3dZ5I9M7q8Z9C", # onyx_analyst_2026!
-        "role": Role.ANALYST,
-        "email": "analyst@onyx.local",
-        "is_active": True,
-        "created_at": datetime.now(timezone.utc).isoformat(),
-    },
-}
+# Bootstrap accounts: environment-driven, nothing hard-coded (see onyx_core.security_policy).
+def _build_users() -> dict[str, dict]:
+    from onyx_core.services.accounts import get_bootstrap_accounts
+    now = datetime.now(timezone.utc).isoformat()
+    return {
+        name: {
+            "id": u.id, "username": u.username, "password_hash": u.password_hash,
+            "role": Role(u.role), "email": u.email, "is_active": True, "created_at": now,
+        }
+        for name, u in get_bootstrap_accounts().items()
+    }
+
+
+_DEFAULT_USERS: dict[str, dict] = _build_users()
 
 # Hardcoded API keys for bootstrapping
 _API_KEYS: dict[str, dict] = {}

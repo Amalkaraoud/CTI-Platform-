@@ -6,10 +6,16 @@ import os
 
 logger = structlog.get_logger(__name__)
 
-POSTGRES_URL = os.getenv(
-    "POSTGRES_URL", 
-    "postgresql://onyx_admin:onyx_pg_secret_2026@localhost:5432/onyx_cti"
-)
+def _default_postgres_url() -> str:
+    """Build the URL from POSTGRES_* variables; no credential is embedded in the code."""
+    from urllib.parse import quote
+    user = os.getenv("POSTGRES_USER", "onyx_admin")
+    pw = quote(os.getenv("POSTGRES_PASSWORD", ""), safe="")
+    host = os.getenv("POSTGRES_HOST", "localhost")
+    return f"postgresql://{user}:{pw}@{host}:5432/onyx_cti"
+
+
+POSTGRES_URL = os.getenv("POSTGRES_URL") or _default_postgres_url()
 
 Base = declarative_base()
 

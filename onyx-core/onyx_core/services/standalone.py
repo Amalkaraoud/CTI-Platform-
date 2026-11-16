@@ -208,16 +208,13 @@ class MockMongoDBService:
         return []
         
     async def get_user_by_username(self, username: str) -> dict[str, Any] | None:
-        # Mock admin user to allow login
-        if username == "admin":
-            return {
-                "username": "admin",
-                "roles": ["admin"],
-                "password_hash": "$2b$12$Z0H99D7qM8aQ81yQ9S.K.OUv3B5N.v/gP6n9J3Z5I9M7q8Z9C8K.O", # onyx_admin_2026!
-                "api_key_hash": "mock",
-                "is_active": True
-            }
-        return None
+        # Standalone accounts are the environment-driven bootstrap accounts (nothing hard-coded).
+        from onyx_core.services.accounts import get_bootstrap_accounts
+        u = get_bootstrap_accounts().get(username)
+        if not u:
+            return None
+        return {"username": u.username, "roles": [u.role], "password_hash": u.password_hash,
+                "api_key_hash": "mock", "is_active": True}
 
 class MockRedisClient:
     """

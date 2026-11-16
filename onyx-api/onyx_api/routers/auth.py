@@ -19,6 +19,9 @@ from onyx_api.auth.jwt import (
 
 router = APIRouter()
 
+# Verified against when the username is unknown, to keep timing uniform.
+_DUMMY_HASH = hash_password("onyx-timing-equalizer")
+
 
 @router.post("/auth/login", summary="Login and get JWT tokens")
 async def login(request: LoginRequest) -> TokenPair:
@@ -26,11 +29,10 @@ async def login(request: LoginRequest) -> TokenPair:
     Authenticate with username/password and receive a JWT token pair.
     """
     user = _DEFAULT_USERS.get(request.username)
-    import os
-    if os.environ.get("STANDALONE_MODE") == "true":
-        return create_token_pair(user["id"], user["username"], user["role"])
-        
-    if not user or not verify_password(request.password, user["password_hash"]):
+    # Same work and same answer whether the user exists or not (no username oracle, no auth bypass).
+    stored_hash = user["password_hash"] if user else _DUMMY_HASH
+    password_ok = verify_password(request.password, stored_hash)
+    if not user or not password_ok:
         raise HTTPException(status_code=401, detail="Invalid username or password")
 
     if not user.get("is_active", True):

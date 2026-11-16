@@ -6,6 +6,8 @@ via the API to stress-test the 3D Threat Graph and ATT&CK Matrix.
 """
 
 import asyncio
+import os
+import sys
 import httpx
 import logging
 import random
@@ -17,8 +19,10 @@ logger = logging.getLogger("ExhibitionInjector")
 
 API_BASE = "http://localhost:8000"
 API_ROOT = "onyx-cti"
-ADMIN_USER = "admin"
-ADMIN_PASS = "onyx_admin_2026!"
+ADMIN_USER = os.getenv("ONYX_ADMIN_USERNAME", "admin")
+ADMIN_PASS = os.getenv("ONYX_ADMIN_PASSWORD")
+if not ADMIN_PASS:
+    sys.exit("Set ONYX_ADMIN_PASSWORD (and optionally ONYX_ADMIN_USERNAME) before running this script.")
 
 def generate_stix_id(type_name: str) -> str:
     return f"{type_name}--{uuid.uuid4()}"
@@ -128,7 +132,7 @@ async def main():
         seed_res = await client.post(
             f"{API_BASE}/api/v1/_internal/seed",
             json={"objects": objects},
-            headers={"Content-Type": "application/json"}
+            headers={"Content-Type": "application/json", "Authorization": f"Bearer {token}"},
         )
         if seed_res.status_code == 200:
             logger.info(f"[+] Successfully injected full STIX graph. Result: {seed_res.json()}")

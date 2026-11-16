@@ -23,7 +23,7 @@ help: ## Show this help
 
 # --- Environment ---
 init: ## Initialize environment (copy .env, create dirs)
-	@test -f .env || cp .env.example .env
+	@python3 scripts/gen_env.py
 	@echo "[ONYX] Environment file ready"
 
 # --- Docker ---
@@ -67,6 +67,9 @@ test: ## Run all tests
 	cd onyx-core && python -m pytest tests/ -v
 	cd onyx-api && python -m pytest tests/ -v
 
+lab: ## Serve the live Signal Lab on http://127.0.0.1:8765
+	python3 demo/lab_server.py
+
 lint: ## Run linting (ruff + mypy)
 	cd onyx-core && ruff check . && mypy .
 	cd onyx-api && ruff check . && mypy .
@@ -85,10 +88,10 @@ reset: clean ## Full reset: remove all data and rebuild
 
 # --- Database ---
 es-status: ## Check Elasticsearch cluster health
-	@curl -sf -u elastic:$${ELASTICSEARCH_PASSWORD:-onyx_elastic_secret_2026} http://localhost:9200/_cluster/health?pretty
+	@curl -sf -u elastic:$${ELASTICSEARCH_PASSWORD} http://localhost:9200/_cluster/health?pretty
 
 mongo-shell: ## Open MongoDB shell
-	docker compose exec mongodb mongosh -u $${MONGODB_USER:-onyx_admin} -p $${MONGODB_PASSWORD:-onyx_mongo_secret_2026} --authenticationDatabase admin onyx_cti
+	docker compose exec mongodb mongosh -u $${MONGODB_USER:-onyx_admin} -p $${MONGODB_PASSWORD} --authenticationDatabase admin onyx_cti
 
 redis-cli: ## Open Redis CLI
-	docker compose exec redis redis-cli -a $${REDIS_PASSWORD:-onyx_redis_secret_2026}
+	docker compose exec redis redis-cli -a $${REDIS_PASSWORD}

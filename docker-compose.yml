@@ -4,14 +4,14 @@ services:
   redis:
     image: redis:7-alpine
     container_name: onyx_redis
-    command: redis-server --requirepass ${REDIS_PASSWORD:-onyx_redis_secret_2026}
+    command: redis-server --requirepass ${REDIS_PASSWORD:?run python3 scripts/gen_env.py}
     restart: unless-stopped
     expose:
       - "6379"
     networks:
       - onyx_secure_backend
     healthcheck:
-      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-onyx_redis_secret_2026}", "ping"]
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:?run python3 scripts/gen_env.py}", "ping"]
       interval: 5s
       timeout: 3s
       retries: 3
@@ -23,7 +23,7 @@ services:
     environment:
       POSTGRES_DB: onyx_cti
       POSTGRES_USER: ${POSTGRES_USER:-onyx_admin}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-onyx_pg_secret_2026}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?run python3 scripts/gen_env.py}
     expose:
       - "5432"
     networks:
@@ -41,7 +41,7 @@ services:
     container_name: onyx_neo4j
     restart: unless-stopped
     environment:
-      NEO4J_AUTH: ${NEO4J_USER:-neo4j}/${NEO4J_PASSWORD:-onyx_graph_secret_2026}
+      NEO4J_AUTH: ${NEO4J_USER:-neo4j}/${NEO4J_PASSWORD:?run python3 scripts/gen_env.py}
     expose:
       - "7687"
       - "7474"
@@ -65,14 +65,15 @@ services:
       - "8000:8000"
     environment:
       - ONYX_ENV=production
-      - ONYX_DEBUG=true
-      - STANDALONE_MODE=true
+      - ONYX_DEBUG=${ONYX_DEBUG:-false}
+      - STANDALONE_MODE=${STANDALONE_MODE:-true}
+      - ONYX_ENV=${ONYX_ENV:-development}
       - REDIS_HOST=redis
-      - REDIS_PASSWORD=${REDIS_PASSWORD:-onyx_redis_secret_2026}
-      - POSTGRES_URL=postgresql://${POSTGRES_USER:-onyx_admin}:${POSTGRES_PASSWORD:-onyx_pg_secret_2026}@postgres:5432/onyx_cti
+      - REDIS_PASSWORD=${REDIS_PASSWORD:?run python3 scripts/gen_env.py}
+      - POSTGRES_URL=postgresql://${POSTGRES_USER:-onyx_admin}:${POSTGRES_PASSWORD:?run python3 scripts/gen_env.py}@postgres:5432/onyx_cti
       - NEO4J_URI=bolt://neo4j:7687
       - NEO4J_USER=${NEO4J_USER:-neo4j}
-      - NEO4J_PASSWORD=${NEO4J_PASSWORD:-onyx_graph_secret_2026}
+      - NEO4J_PASSWORD=${NEO4J_PASSWORD:?run python3 scripts/gen_env.py}
       - OSINT_ALIENVAULT_OTX_KEY=${OSINT_ALIENVAULT_OTX_KEY:-}
       # Additional environment configurations inherited from .env
     env_file:
