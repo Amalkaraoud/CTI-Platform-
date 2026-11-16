@@ -1,44 +1,65 @@
-# ONYX CTI
+<div align="center">
 
-**A Cyber Threat Intelligence platform that tells you how much an indicator is still worth, and why.**
+<img src="docs/assets/banner.svg" alt="ONYX CTI: threat intelligence that knows when an indicator goes stale" width="100%">
 
-Most threat feeds ship indicators of compromise (IoCs) with no expiry date: an IP address reported three months ago weighs as much as one seen this morning. ONYX aggregates OSINT sources, links them to threat actors and to the MITRE ATT&CK framework, then gives every indicator a confidence score that decays over time, strengthens with corroboration and breaks down into readable components.
+<br>
 
-![ONYX Signal Lab: decay curves and indicator board](docs/assets/signal-lab.png)
+**Most threat feeds tell you an indicator is malicious. ONYX also tells you how much it is still worth.**
 
-## See the idea in thirty seconds
+[Signal Lab](#signal-lab) &nbsp;&middot;&nbsp; [Engines](#the-three-engines) &nbsp;&middot;&nbsp; [Architecture](#architecture) &nbsp;&middot;&nbsp; [Security](#security) &nbsp;&middot;&nbsp; [Quick start](#getting-started) &nbsp;&middot;&nbsp; [Validation](#validation-what-was-actually-run)
 
-The `demo/` folder contains **Signal Lab**, a four-part experience built on the repository's real engines.
+</div>
+
+| Scoring engines | IoC types handled | Confidence components | Verified tests | Actors compared |
+|:---:|:---:|:---:|:---:|:---:|
+| **3** | **16** | **5** | **66 passing** | **12** (MITRE ATT&CK) |
+
+An IP address reported three months ago weighs as much as one seen this morning in most feeds. ONYX aggregates OSINT sources, links them to threat actors and MITRE ATT&CK, then gives every indicator a score that **decays with time**, **strengthens with corroboration** and **breaks down into components an analyst can read**.
+
+![How fast does an indicator lose value](docs/assets/decay-profiles.svg)
+
+*Curves computed by the repository's own decay engine (`demo/build_readme_assets.py`), not drawn by hand.*
+
+## Signal Lab
+
+A four-part interactive experience built on the real engines, shipped in [`demo/`](demo). No dependency beyond Python.
 
 ```bash
-python3 demo/lab_server.py          # or: make lab   ->   http://127.0.0.1:8765
+python3 demo/lab_server.py      # http://127.0.0.1:8765   (or: make lab)
 ```
 
-The server uses only the Python standard library, listens on 127.0.0.1 only, and calls the same facade (`onyx-api/onyx_api/services/analysis.py`) as the REST API. Without the server, `demo/ONYX_Signal_Lab.html` opens with a double-click and keeps the precomputed sections.
+![Signal Lab: decay curves and indicator board](docs/assets/signal-lab.png)
 
-| Section | What it shows | Works without server |
+| Section | What it shows | Without the server |
 |---|---|---|
 | 01 Decay | Half-life per indicator family (IP, URL, domain, hash, JA3) | yes |
-| 02 Workshop | Type, hosting provider or TLD, age, source, number of sources, contestation, analyst note, weights: every setting is recomputed by the engines and the score breakdown is readable | no |
-| 03 Board | Re-ranking of the 16 IoCs in the startup cache as time passes, ONYX confidence compared with the confidence claimed by the source | yes |
+| 02 Workshop | Every setting (type, host or TLD, age, source, corroboration, contestation, analyst note, weights) recomputed by the engines, with a readable score breakdown | no |
+| 03 Board | The 16 IoCs of the startup cache re-ranked as time passes, ONYX confidence against the confidence claimed by the source | yes |
 | 04 Convergence | Jaccard similarity between 12 MITRE groups, at technique or parent-technique level | yes |
+
+`demo/ONYX_Signal_Lab.html` opens with a double-click and keeps the precomputed sections. The server uses the standard library only, listens on 127.0.0.1 and calls the same facade as the REST API.
 
 ![The workshop: curve, state and score breakdown](docs/assets/signal-lab-atelier.png)
 
-What is simulated, and flagged as such in the page: the age of the non-CVE IoCs on the board (the cache holds no observation timestamp). The publication dates of the two CVEs are real. Nothing here is live intelligence.
+What is simulated, and flagged as such in the page: the age of the non-CVE IoCs on the board (the cache holds no observation timestamp). Nothing here is live intelligence.
 
-One result the tool makes visible: on the techniques documented in `actors.json`, no pair of groups reaches the engine's convergence threshold of 0.65, neither at full technique level (maximum 0.31) nor at parent-technique level (maximum 0.42). That threshold is a parameter to recalibrate, not a truth.
+![Behavioural convergence between threat actors](docs/assets/signal-lab-convergence.png)
 
-## Dashboard: Intelligence page
+A result the tool makes visible: on the techniques documented in `actors.json`, **no pair of groups reaches the engine's 0.65 convergence threshold** (maximum 0.31 at technique level, 0.42 at parent level). The threshold is a parameter to recalibrate, not a truth.
 
-The `/intelligence` route of the Next.js dashboard reproduces the workshop and the convergence matrix, fed live by `/api/v1/engines/*` (loading, error and retry states, cancellable requests, no added dependency). Styles are scoped under `.ix`: the rest of the dashboard is untouched.
+## The three engines
 
-```bash
-cd onyx-dashboard && npm install && npm run dev      # http://localhost:3000/intelligence
-cd onyx-api && uvicorn onyx_api.main:app --port 8000
-```
+| Engine | Question it answers | How |
+|---|---|---|
+| `decay_engine` | How fresh is this indicator? | Exponential decay with a half-life per nature of indicator: a public-cloud IP is recycled within hours (6 h), a criminal host lasts four days, a JA3 fingerprint six months. A domain's half-life depends on its TLD and registrar tier. A file hash never drops below 0.30. At the half-life the score is exactly 0.5 by construction. |
+| `confidence_composite` | How much should I trust it? | Five weighted components: source reliability (Admiralty-style table), corroboration, freshness, contextual relevance, analyst override. A contested attribution applies a multiplicative penalty. Every component is exposed. |
+| `behavioral_convergence` | Do two actors behave alike? | Jaccard similarity on ATT&CK technique sets, with a convergence threshold and an interpretation text. |
 
-This page was checked with strict type checking against minimal React declarations; `next build` could not be run in the development environment (no npm registry access). See "Known limitations".
+Around them: a Next.js dashboard (deck.gl geopolitical map, Cytoscape threat graph, ATT&CK matrix, IoC explorer), a FastAPI backend with JWT authentication, a TAXII 2.1 server, STIX 2.1 export, NLP-based IoC extraction and TTP mapping, and a RAG assistant. OSINT feeds include CISA KEV, MITRE ATT&CK, GDELT, abuse.ch, AlienVault OTX, AbuseIPDB and VirusTotal.
+
+### Dashboard: `/intelligence`
+
+The Next.js route `/intelligence` reproduces the workshop and the convergence matrix, fed live by `/api/v1/engines/*` (loading, error and retry states, cancellable requests, no added dependency, styles scoped under `.ix`).
 
 ### Engines API
 
@@ -51,16 +72,6 @@ This page was checked with strict type checking against minimal React declaratio
 | GET | `/api/v1/engines/convergence/pair?a=&b=&level=` | Comparison of two actors, shared techniques |
 
 These routes are read-only, store nothing and bound their inputs (window size, number of points, number of techniques); invalid input returns 422.
-
-## What sets ONYX apart
-
-**Decay per indicator nature.** A public-cloud IP is recycled within hours (6 h half-life), a crime-dedicated host lasts four days, a JA3 fingerprint six months. A domain's half-life depends on its TLD and the tier of its registrar. A file hash never drops below 0.30: it stays useful for forensics. At the half-life, the score is exactly 0.5 by construction.
-
-**A decomposable confidence score.** Five weighted components: source reliability (Admiralty-style table), corroboration, freshness, contextual relevance, analyst override. A contested attribution applies a multiplicative penalty. Every component is exposed so the analyst can see where the number comes from.
-
-**Behavioural comparison between actors.** Jaccard similarity on ATT&CK technique sets, with a convergence threshold and an interpretation text.
-
-**A full platform around these engines**: Next.js dashboard (deck.gl geopolitical map, threat graph, ATT&CK matrix, IoC explorer), FastAPI API with JWT authentication, TAXII 2.1 server, STIX 2.1 export, NLP-based IoC extraction and TTP mapping, RAG assistant.
 
 ## Architecture
 
@@ -207,7 +218,7 @@ To validate the rest on a machine with network access: `pip install -r requireme
 
 - The static technique sets in `behavioral_convergence.py` (12 actors) are smaller than those in `actors.json`; the 0.65 threshold needs recalibrating on the full data.
 - PostgreSQL and Neo4j are declared in the compose file and have clients in `onyx-core`, but their end-to-end integration has not been verified.
-- The rest of the dashboard (map, graph, copilot) was not reworked; only the `/intelligence` page is new.
+- The rest of the dashboard (map, graph, copilot) was not reworked; only the `/intelligence` page is new. This README shows no screenshot of the main dashboard because none has been captured from a running instance yet.
 - WCAG contrast and strict STIX 2.1 compliance were not validated with a tool.
 
 ## Next steps
