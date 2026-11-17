@@ -75,45 +75,86 @@ These routes are read-only, store nothing and bound their inputs (window size, n
 
 ## Architecture
 
+The final architecture has seven layers. The diagram below is the reference; the table after it maps each box to the code in this repository.
+
+![ONYX CTI final architecture](docs/assets/architecture.png)
+
 ```mermaid
 flowchart LR
-    subgraph Sources
-        S1[CISA KEV, MITRE, GDELT<br/>no key]
-        S2[abuse.ch, OTX, AbuseIPDB<br/>VirusTotal with key]
+    subgraph L1["1. External sources"]
+        S1[Web and dark web<br/>forums, markets]
+        S2[Public CTI feeds<br/>MITRE, NVD, CISA, abuse.ch]
     end
 
-    subgraph Dashboard["onyx-dashboard (Next.js 14)"]
-        P[Server proxy<br/>/api/proxy/source]
-        UI[Map, graph, ATT&CK matrix,<br/>IoC explorer, copilot]
+    subgraph L2["2. Collection, ingestion, injection"]
+        CR[Crawlers<br/>Scrapy, Playwright, BeautifulSoup4]
+        CN[API connectors<br/>STIX 2.1, TAXII]
+        IN[Injection tools<br/>CSV / JSON]
     end
 
-    subgraph API["onyx-api (FastAPI)"]
-        R[REST, SSE, WebSocket routers,<br/>TAXII 2.1, engines API]
-        SV[Services: RAG, guardrails,<br/>GeoIP, reports]
-        W[Workers: OSINT poller,<br/>RSS ingestion, IoC persistence]
+    subgraph L3["3. Core engine and AI"]
+        BE[Backend<br/>FastAPI, Uvicorn, GraphQL, WebSockets]
+        SEC[Security and docs<br/>JWT, RBAC, OpenAPI]
+        CE[Async tasks<br/>Celery workers]
+        AI[Semantic AI<br/>SciBERT, NER, similarity]
+        RG[Rule generation<br/>YARA, Sigma]
     end
 
-    subgraph Core["onyx-core"]
-        D[decay_engine]
-        C[confidence_composite]
-        T[threat_scoring]
+    subgraph L4["4. Data fabric"]
+        M[(MongoDB)]
+        R[(Redis)]
+        P[(PostgreSQL)]
+        N[(Neo4j)]
+        E[(Elasticsearch)]
+        Q[(Qdrant)]
     end
 
-    N[onyx-nlp<br/>IoC extraction, TTP mapping]
-    ST[(Redis, Elasticsearch, MongoDB,<br/>PostgreSQL, Neo4j, Qdrant)]
+    subgraph L5["5. User interface"]
+        UI[Next.js 14 dashboard<br/>map, 3D graph, reports, charts, assistant]
+    end
 
-    S1 --> P
-    S2 --> P
-    P --> UI
-    UI <--> R
-    R --> SV
-    W --> D
-    D --> C
-    C --> T
-    SV --> N
-    W --> ST
-    R --> ST
+    subgraph L6["6. Partner export"]
+        G[MISP, OpenCTI]
+        X[Splunk, other SIEM]
+    end
+
+    subgraph L7["7. Local deployment and tests"]
+        DK[Docker Compose, scripts, test_ia_live.py]
+    end
+
+    S1 --> CR --> BE
+    S2 --> CN --> BE
+    IN --> BE
+    BE --> SEC
+    BE --> CE
+    CE <--> AI
+    AI --> RG
+    BE --> M & R & P & N & E
+    AI -.-> Q
+    BE <--> UI
+    BE --> G
+    RG --> X
+    DK -.-> BE
+    DK -.-> L4
 ```
+
+| Layer | Diagram box | Where it lives |
+|---|---|---|
+| 1 | Web / dark web, public CTI feeds | `onyx-crawlers/`, `onyx-api/onyx_api/services/osint_integrations.py`, `workers/osint_poller.py` |
+| 2 | Crawlers (Scrapy, Playwright, BeautifulSoup4) | `onyx-crawlers/` (`darkweb/scrapy_spider.py`, `darkweb/spiders/`, `clearweb/`), Tor in `infra/tor/` |
+| 2 | API connectors (STIX 2.1, TAXII) | `onyx-api/onyx_api/routers/taxii.py`, `onyx-connectors/` |
+| 2 | Injection tools | `scripts/` |
+| 3 | Backend (FastAPI, GraphQL, WebSockets) | `onyx-api/onyx_api/main.py`, `graphql_schema.py`, `routers/websocket_hub.py` |
+| 3 | Security and documentation (JWT, RBAC, OpenAPI) | `onyx-api/onyx_api/auth/`, `middleware.py`, Swagger at `/api/docs` |
+| 3 | Celery workers | `onyx-api/onyx_api/tasks.py`, `onyx-core/onyx_core/services/celery_app.py` |
+| 3 | Semantic AI (SciBERT, NER) | `onyx-nlp/` (extraction, TTP mapping); scoring engines in `onyx-core/onyx_core/services/` (decay, confidence) and `onyx-api/onyx_api/services/behavioral_convergence.py` |
+| 3 | YARA and Sigma | `onyx-analyzers/onyx_analyzers/rules.py`, `POST /api/v1/rules/generate` |
+| 4 | MongoDB, Redis, PostgreSQL, Neo4j, Elasticsearch, Qdrant | `docker-compose.yml`, `infra/`, `onyx-core/onyx_core/services/` |
+| 5 | Dashboard | `onyx-dashboard/` |
+| 6 | MISP, OpenCTI, Splunk and other SIEM | `onyx-connectors/` (`export.py`, `dispatch.py`) |
+| 7 | Docker Compose, scripts | `docker-compose.yml`, `scripts/`, `test_ia_live.py`, `Makefile` |
+
+Three boxes of the diagram differ from the code today: the dashboard does not use Zod yet, the AI assistant runs server-side (Google GenAI is called from Python, not from the browser), and Qdrant stores Gemini embeddings rather than SciBERT vectors. Details and the status of every box are in [`docs/ARCHITECTURE_CONFORMITY.md`](docs/ARCHITECTURE_CONFORMITY.md).
 
 API keys never leave the server: the browser calls `/api/proxy/[source]`, which adds the secrets on the Next.js side.
 
