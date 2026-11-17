@@ -18,7 +18,7 @@ from enum import Enum
 from typing import Any
 
 import orjson
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 def _utcnow() -> datetime:
@@ -223,12 +223,18 @@ class STIXBase(BaseModel):
     )
 
     # ONYX-specific extensions (not part of STIX spec)
+    # Serialised as STIX custom properties (`x_onyx_*`, STIX 2.1 section 3.3) when dumped by alias.
+    # Both spellings are accepted on input, so documents written before this change still load.
     onyx_source: str | None = Field(
         default=None,
+        validation_alias=AliasChoices("x_onyx_source", "onyx_source"),
+        serialization_alias="x_onyx_source",
         description="ONYX data source identifier (crawler, feed, manual)",
     )
     onyx_tags: list[str] = Field(
         default_factory=list,
+        validation_alias=AliasChoices("x_onyx_tags", "onyx_tags"),
+        serialization_alias="x_onyx_tags",
         description="ONYX platform tags for internal categorization",
     )
 

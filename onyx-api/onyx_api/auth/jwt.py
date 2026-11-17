@@ -239,6 +239,31 @@ def _build_users() -> dict[str, dict]:
 
 _DEFAULT_USERS: dict[str, dict] = _build_users()
 
+
+def load_users_from_postgres(url: str) -> int:
+    """
+    Make PostgreSQL the source of truth for accounts (report section 6: users, RBAC, audit).
+
+    Bootstrap accounts are inserted only when absent, then every database account replaces the
+    in-process cache. Audit events are also persisted to the `onyx_audit_log` table. Returns the
+    number of accounts loaded; raises on connection errors so the caller can fall back to the
+    in-memory bootstrap accounts.
+    """
+    import logging as _logging
+    from onyx_core.services.user_store import AuditDatabaseHandler, postgres_store, sync_bootstrap_users
+
+    store = postgres_store(url)
+    db_users = sync_bootstrap_users(store, _DEFAULT_USERS)
+    for name, row in db_users.items():
+        row = dict(row)
+        row["role"] = Role(row["role"])
+        _DEFAULT_USERS[name] = row
+    audit_logger = _logging.getLogger("onyx.audit")
+    if not any(isinstance(h, AuditDatabaseHandler) for h in audit_logger.handlers):
+        audit_logger.addHandler(AuditDatabaseHandler(store))
+        audit_logger.setLevel(_logging.INFO)
+    return len(db_users)
+
 # Hardcoded API keys for bootstrapping
 _API_KEYS: dict[str, dict] = {}
 

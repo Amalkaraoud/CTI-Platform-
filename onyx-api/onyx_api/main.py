@@ -7,6 +7,7 @@ Production-grade: CORS, lifecycle hooks, structured logging, health checks.
 from __future__ import annotations
 
 import asyncio
+import os
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
@@ -16,6 +17,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import ORJSONResponse
 
+from onyx_api.middleware import RateLimitAuditMiddleware
 from onyx_core import security_policy
 from onyx_core.config import get_config
 from onyx_core.services import ElasticsearchService, MongoDBService, RedisService
@@ -80,6 +82,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         version="3.0.0",
         codename="GENESIS",
     )
+
+    # Accounts, RBAC and audit trail live in PostgreSQL when it is configured; otherwise the
+    # environment-driven bootstrap accounts stay in memory (standalone mode).
+    pg_url = os.environ.get("POSTGRES_URL", "")
+    if pg_url:
+        try:
+            from onyx_api.auth.jwt import load_users_from_postgres
+
+            n_users = await asyncio.to_thread(load_users_from_postgres, pg_url)
+            logger.info("onyx.postgres.ready", users=n_users)
+        except Exception as e:
+            logger.error("onyx.postgres.error", error=str(e), fallback="in-memory bootstrap accounts")
 
     # Initialize database services
     try:
@@ -335,6 +349,7 @@ def create_app() -> FastAPI:
     # --- CORS (v4.0-APEX: environment-aware) ---
     # Wildcards are never served; credentials only with an explicit origin list.
     cors_origins, cors_credentials = security_policy.resolve_cors(config.api_cors_origins, config.env)
+    app.add_middleware(RateLimitAuditMiddleware)  # rate limiting + audit trail (inside CORS, so 429 responses still carry CORS headers)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=cors_origins,
@@ -344,7 +359,7 @@ def create_app() -> FastAPI:
     )
 
     # --- Register Routers ---
-    from onyx_api.routers import health, iocs, dashboard, auth, taxii, internal, nlp, agent, chat, mitre, reports, actors, engines
+    from onyx_api.routers import health, iocs, dashboard, auth, taxii, internal, nlp, agent, chat, mitre, reports, actors, engines, rules
     from onyx_api.routers import websocket_hub
 
     app.include_router(health.router, prefix="/api/v1", tags=["Health"])
@@ -361,6 +376,16 @@ def create_app() -> FastAPI:
     app.include_router(chat.router, prefix="/api/v1")
     app.include_router(reports.router, prefix="/api/v1", tags=["Reports"])
     app.include_router(engines.router, prefix="/api/v1")
+    app.include_router(rules.router, prefix="/api/v1")
+
+    # --- GraphQL (Strawberry), behind the same JWT dependency as the REST API ---
+    try:
+        from fastapi import Depends
+        from onyx_api.auth.jwt import get_current_user
+        from onyx_api.graphql_schema import graphql_router
+        app.include_router(graphql_router, prefix="/graphql", dependencies=[Depends(get_current_user)], tags=["GraphQL"])
+    except ImportError as exc:  # strawberry-graphql not installed
+        logger.warning("onyx.graphql.disabled", reason=str(exc))
 
     # v4.0-APEX: WebSocket Event Bus
     app.include_router(websocket_hub.router, tags=["WebSocket"])

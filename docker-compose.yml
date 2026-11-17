@@ -55,6 +55,79 @@ services:
       timeout: 10s
       retries: 3
 
+  mongodb:
+    image: mongo:7
+    container_name: onyx_mongodb
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGODB_USER:-onyx_admin}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGODB_PASSWORD:?run python3 scripts/gen_env.py}
+      MONGO_INITDB_DATABASE: ${MONGODB_DATABASE:-onyx_cti}
+    expose:
+      - "27017"
+    networks:
+      - onyx_secure_backend
+    volumes:
+      - mongodb_data:/data/db
+      - ./infra/mongodb/init-mongo.js:/docker-entrypoint-initdb.d/init-mongo.js:ro
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.13.4
+    container_name: onyx_elasticsearch
+    restart: unless-stopped
+    environment:
+      ELASTIC_PASSWORD: ${ELASTICSEARCH_PASSWORD:?run python3 scripts/gen_env.py}
+      ES_JAVA_OPTS: ${ES_JAVA_OPTS:--Xms512m -Xmx512m}
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    expose:
+      - "9200"
+    networks:
+      - onyx_secure_backend
+    volumes:
+      - elasticsearch_data:/usr/share/elasticsearch/data
+      - ./infra/elasticsearch/elasticsearch.yml:/usr/share/elasticsearch/config/elasticsearch.yml:ro
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s -u elastic:${ELASTICSEARCH_PASSWORD} http://localhost:9200/_cluster/health | grep -qE '\"status\":\"(green|yellow)\"'"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+
+  qdrant:
+    image: qdrant/qdrant:v1.9.7
+    container_name: onyx_qdrant
+    restart: unless-stopped
+    expose:
+      - "6333"
+    networks:
+      - onyx_secure_backend
+    volumes:
+      - qdrant_data:/qdrant/storage
+
+  tor-proxy:
+    build:
+      context: ./infra/tor
+      dockerfile: Dockerfile
+    container_name: onyx_tor
+    restart: unless-stopped
+    environment:
+      - TOR_CONTROL_PASSWORD=${TOR_CONTROL_PASSWORD:?run python3 scripts/gen_env.py}
+      - TOR_CIRCUIT_ROTATION_SECONDS=${TOR_CIRCUIT_ROTATION_SECONDS:-300}
+    expose:
+      - "9050"
+      - "9051"
+      - "8118"
+    networks:
+      - onyx_secure_backend
+      - onyx_tor_egress
+
   backend:
     build:
       context: .
@@ -64,11 +137,19 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - ONYX_ENV=production
       - ONYX_DEBUG=${ONYX_DEBUG:-false}
       - STANDALONE_MODE=${STANDALONE_MODE:-true}
       - ONYX_ENV=${ONYX_ENV:-development}
       - REDIS_HOST=redis
+      - MONGODB_HOST=mongodb
+      - MONGODB_USER=${MONGODB_USER:-onyx_admin}
+      - MONGODB_PASSWORD=${MONGODB_PASSWORD:?run python3 scripts/gen_env.py}
+      - ELASTICSEARCH_HOST=elasticsearch
+      - ELASTICSEARCH_USER=elastic
+      - ELASTICSEARCH_PASSWORD=${ELASTICSEARCH_PASSWORD:?run python3 scripts/gen_env.py}
+      - QDRANT_URL=http://qdrant:6333
+      - ONYX_RATE_LIMIT=${ONYX_RATE_LIMIT:-1200/60}
+      - ONYX_AUTH_RATE_LIMIT=${ONYX_AUTH_RATE_LIMIT:-10/60}
       - REDIS_PASSWORD=${REDIS_PASSWORD:?run python3 scripts/gen_env.py}
       - POSTGRES_URL=postgresql://${POSTGRES_USER:-onyx_admin}:${POSTGRES_PASSWORD:?run python3 scripts/gen_env.py}@postgres:5432/onyx_cti
       - NEO4J_URI=bolt://neo4j:7687
@@ -88,6 +169,99 @@ services:
         condition: service_healthy
       neo4j:
         condition: service_healthy
+      mongodb:
+        condition: service_healthy
+        required: false
+      elasticsearch:
+        condition: service_healthy
+        required: false
+      qdrant:
+        condition: service_started
+        required: false
+
+  celery-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: onyx_celery_worker
+    restart: unless-stopped
+    command: ["celery", "-A", "onyx_core.services.celery_app:celery", "worker", "--loglevel=INFO", "-Q", "default,crawlers,nlp,analysis"]
+    environment: &celery_env
+      - STANDALONE_MODE=${STANDALONE_MODE:-true}
+      - ONYX_ENV=${ONYX_ENV:-development}
+      - REDIS_HOST=redis
+      - REDIS_PASSWORD=${REDIS_PASSWORD:?run python3 scripts/gen_env.py}
+      - MONGODB_HOST=mongodb
+      - MONGODB_USER=${MONGODB_USER:-onyx_admin}
+      - MONGODB_PASSWORD=${MONGODB_PASSWORD:?run python3 scripts/gen_env.py}
+      - ELASTICSEARCH_HOST=elasticsearch
+      - ELASTICSEARCH_PASSWORD=${ELASTICSEARCH_PASSWORD:?run python3 scripts/gen_env.py}
+      - NEO4J_URI=bolt://neo4j:7687
+      - NEO4J_USER=${NEO4J_USER:-neo4j}
+      - NEO4J_PASSWORD=${NEO4J_PASSWORD:?run python3 scripts/gen_env.py}
+      - TOR_SOCKS_PORT=9050
+      - ONYX_DECAY_ENGINE_ENABLED=${ONYX_DECAY_ENGINE_ENABLED:-true}
+      - ONYX_GRAPH_SYNC_ENABLED=${ONYX_GRAPH_SYNC_ENABLED:-true}
+      - POSTGRES_URL=postgresql://${POSTGRES_USER:-onyx_admin}:${POSTGRES_PASSWORD:?run python3 scripts/gen_env.py}@postgres:5432/onyx_cti
+    env_file:
+      - .env
+    networks:
+      - onyx_secure_backend
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  ioc-persister:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: onyx_ioc_persister
+    restart: unless-stopped
+    # Consumes the Redis Stream and persists to Elasticsearch, then projects each IOC into Neo4j.
+    command: ["python", "-m", "onyx_api.workers.ioc_persister"]
+    environment: *celery_env
+    env_file:
+      - .env
+    networks:
+      - onyx_secure_backend
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  celery-beat:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: onyx_celery_beat
+    restart: unless-stopped
+    command: ["celery", "-A", "onyx_core.services.celery_app:celery", "beat", "--loglevel=INFO", "-s", "/tmp/celerybeat-schedule"]
+    environment: *celery_env
+    env_file:
+      - .env
+    networks:
+      - onyx_secure_backend
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  # TLS 1.3 edge. Opt in with:  docker compose --profile tls up   (needs infra/nginx/certs/tls.{crt,key})
+  tls-proxy:
+    image: nginx:1.27-alpine
+    container_name: onyx_tls_proxy
+    profiles: ["tls"]
+    restart: unless-stopped
+    ports:
+      - "443:443"
+      - "80:80"
+    volumes:
+      - ./infra/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./infra/nginx/proxy_params:/etc/nginx/proxy_params:ro
+      - ./infra/nginx/certs:/etc/nginx/certs:ro
+    networks:
+      - onyx_frontend_bridge
+    depends_on:
+      - backend
+      - frontend
 
   frontend:
     build:
@@ -111,7 +285,13 @@ networks:
     name: onyx_secure_backend
   onyx_frontend_bridge:
     name: onyx_frontend_bridge
+  # Only the Tor container gets outbound access; the backend network stays internal.
+  onyx_tor_egress:
+    name: onyx_tor_egress
 
 volumes:
   postgres_data:
   neo4j_data:
+  mongodb_data:
+  elasticsearch_data:
+  qdrant_data:

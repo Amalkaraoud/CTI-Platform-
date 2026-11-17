@@ -7,7 +7,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
+
+from onyx_core.audit import audit
 
 from onyx_api.auth.jwt import (
     LoginRequest, TokenPair, UserCreate, UserPayload, UserResponse,
@@ -24,7 +26,7 @@ _DUMMY_HASH = hash_password("onyx-timing-equalizer")
 
 
 @router.post("/auth/login", summary="Login and get JWT tokens")
-async def login(request: LoginRequest) -> TokenPair:
+async def login(request: LoginRequest, http: Request) -> TokenPair:
     """
     Authenticate with username/password and receive a JWT token pair.
     """
@@ -32,11 +34,16 @@ async def login(request: LoginRequest) -> TokenPair:
     # Same work and same answer whether the user exists or not (no username oracle, no auth bypass).
     stored_hash = user["password_hash"] if user else _DUMMY_HASH
     password_ok = verify_password(request.password, stored_hash)
+    ip = http.client.host if http.client else None
     if not user or not password_ok:
+        audit("auth.login", "failure", actor=request.username, client_ip=ip)
         raise HTTPException(status_code=401, detail="Invalid username or password")
 
     if not user.get("is_active", True):
+        audit("auth.login", "denied", actor=request.username, client_ip=ip, details={"reason": "deactivated"})
         raise HTTPException(status_code=403, detail="Account deactivated")
+
+    audit("auth.login", "success", actor=user["username"], client_ip=ip)
 
     return create_token_pair(user["id"], user["username"], user["role"])
 

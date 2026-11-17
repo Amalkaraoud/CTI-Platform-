@@ -139,8 +139,10 @@ flowchart TD
 | `onyx-api/` | FastAPI API: routers, services (RAG, guardrails, GeoIP, reports), workers |
 | `onyx-core/` | STIX models, decay, confidence and scoring engines, storage clients |
 | `onyx-nlp/` | IoC and TTP extractors, processing pipeline |
-| `onyx-crawlers/` | Clearweb and darkweb (Tor) crawlers |
-| `infra/` | Elasticsearch, MongoDB, Tor configuration |
+| `onyx-crawlers/` | Clearweb monitors and darkweb crawlers (Scrapy spider through Tor, httpx/Playwright spiders) |
+| `onyx-analyzers/` | SIEM query generation and YARA / Sigma rule generation |
+| `onyx-connectors/` | STIX 2.1 / TAXII, MISP and Splunk HEC export, driven by environment-configured destinations |
+| `infra/` | Elasticsearch, MongoDB, Tor, TLS 1.3 edge (nginx) configuration |
 | `demo/` | Signal Lab (see above) |
 | `scripts/` | `gen_env.py` (secrets), demo data injection, feed checks |
 
@@ -155,18 +157,25 @@ Changes made in this branch:
 - Postgres, Neo4j, Redis and Celery credentials are built from the environment; `docker-compose.yml` refuses to start if they are missing (`python3 scripts/gen_env.py` generates them).
 - `ONYX_DEBUG` defaults to false. In production, a weak or missing JWT secret aborts startup.
 
-The decision logic lives in `onyx-core/onyx_core/security_policy.py` (standard library only) and is covered by tests. Still missing: login rate limiting, a persistent user store, persistent token revocation, authentication on the `/engines` routes if they are exposed publicly.
+- Rate limiting (`onyx_core/ratelimit.py`, applied by `RateLimitAuditMiddleware`): sliding window per client address, with a much stricter budget on `/auth` paths. Tune with `ONYX_RATE_LIMIT` and `ONYX_AUTH_RATE_LIMIT` (for example `1200/60`).
+- Audit trail (`onyx_core/audit.py`): one JSON line per sensitive event (logins, mutating requests, `/internal`, TAXII), secrets scrubbed. Lines go to the `onyx.audit` logger, optionally to `ONYX_AUDIT_LOG`, and to the `onyx_audit_log` PostgreSQL table when `POSTGRES_URL` is set.
+- Accounts and roles are stored in PostgreSQL (`onyx_users`) when `POSTGRES_URL` is set; bootstrap accounts are inserted once and never overwritten. Without it, accounts stay in memory (standalone mode).
+- Export destinations and rule generation inputs are validated; export destinations come from environment variables only, never from a request.
+- TLS 1.3: `docker compose --profile tls up` starts an nginx edge (`infra/nginx`) that refuses anything below TLS 1.3. Certificates are mounted, not committed.
+
+The decision logic lives in `onyx-core/onyx_core/security_policy.py` (standard library only) and is covered by tests. Still missing: persistent token revocation, authentication on the `/engines` routes if they are exposed publicly.
 
 ## Getting started
 
-Requirements: Python 3.11 or later, Node.js 18.17 or later, Docker with Compose.
+Requirements: Python 3.12 or later, Node.js 18.17 or later, Docker with Compose.
 
 ```bash
 git clone https://github.com/Amalkaraoud/CTI-Platform-.git
 cd CTI-Platform-
 python3 scripts/gen_env.py  # creates .env with random secrets; add API keys and the admin account there
 
-docker compose up -d        # infrastructure and backend (STANDALONE_MODE enabled in the compose file)
+docker compose up -d        # redis, postgres, neo4j, mongodb, elasticsearch, qdrant, tor-proxy, backend,
+                            # celery worker + beat, ioc-persister, dashboard (STANDALONE_MODE enabled by default)
 
 cd onyx-dashboard
 npm install
@@ -197,6 +206,8 @@ Sign-ups: [abuse.ch](https://auth.abuse.ch/), [OTX](https://otx.alienvault.com/)
 make test
 ```
 
+The CI workflow runs the suites below (about 116 tests, no running services needed): engines, security policy, rate limiting and audit, Cypher builders, IOC-to-graph projection, user and audit store (on SQLite, same SQL as PostgreSQL), STIX custom properties, the API helpers, rule generation, export (against local stand-in HTTP servers) and crawler page extraction.
+
 Five files need only `pytest` (they load the engines by path, with no FastAPI or database): `test_engines_smoke.py`, `test_security_policy.py`, `test_convergence.py`, `test_analysis.py`, plus `test_lab_server.py`, which starts the lab server and queries it over HTTP. The existing `test_decay_engine.py` and `test_confidence_composite.py` also depend on `hypothesis`; `test_ioc_persister_decay.py` is an integration test.
 
 ## Validation: what was actually run
@@ -204,6 +215,7 @@ Five files need only `pytest` (they load the engines by path, with no FastAPI or
 | Item | Status |
 |---|---|
 | 66 tests (engines, security policy, analysis facade, lab server over real HTTP) | run, passed (also re-run on the maintainer's Windows machine: 66 passed) |
+| 116 tests across all packages, including the new modules listed under Tests | run, passed (Python 3.13 sandbox) |
 | Signal Lab served by `lab_server.py`, queried with curl, rendered and captured with Chrome | run |
 | Python compilation of all modified files | run |
 | Strict type check of the `/intelligence` page against minimal React declarations | run, no error |
@@ -211,13 +223,18 @@ Five files need only `pytest` (they load the engines by path, with no FastAPI or
 | Full FastAPI API (login, CORS, production startup) | not run; the wiring of `jwt.py`, `auth.py`, `main.py` was only compiled |
 | Docker stack (compose, Neo4j, PostgreSQL, Elasticsearch) | not run |
 | `test_decay_engine.py`, `test_confidence_composite.py` (hypothesis), `test_ioc_persister_decay.py` | not run |
+| GraphQL schema (Strawberry), Celery worker and beat, Neo4j writes, PostgreSQL via psycopg2, Scrapy spider, nginx TLS edge | not run: written and checked at the unit level only |
+| YARA rules compiled with `yara`; export against a real MISP, OpenCTI or Splunk | not run |
 
 To validate the rest on a machine with network access: `pip install -r requirements.txt pytest hypothesis`, `make test`, `cd onyx-dashboard && npm install && npm run build`, then `docker compose up`.
 
 ## Known limitations
 
 - The static technique sets in `behavioral_convergence.py` (12 actors) are smaller than those in `actors.json`; the 0.65 threshold needs recalibrating on the full data.
-- PostgreSQL and Neo4j are declared in the compose file and have clients in `onyx-core`, but their end-to-end integration has not been verified.
+- PostgreSQL (accounts, audit) and Neo4j (relationship graph) are now wired in code, but no end-to-end run against the real databases has been made.
+- Retrieval embeddings (RAG, Qdrant) use Gemini vectors, while SciBERT (768 dimensions) is used for extraction and TTP mapping only; no SciBERT weights are shipped. See `docs/ARCHITECTURE_CONFORMITY.md`.
+- The dashboard does not validate API responses with Zod yet: run `npm install zod` first, because the Docker build uses `npm ci`.
+- No Wazuh export connector exists; MISP, TAXII (OpenCTI, Elastic) and Splunk HEC do.
 - The rest of the dashboard (map, graph, copilot) was not reworked; only the `/intelligence` page is new. This README shows no screenshot of the main dashboard because none has been captured from a running instance yet.
 - WCAG contrast and strict STIX 2.1 compliance were not validated with a tool.
 
@@ -225,7 +242,7 @@ To validate the rest on a machine with network access: `pip install -r requireme
 
 - Feed per-actor half-lives from real observations (the `decay_learning_worker.py` worker lays the groundwork).
 - Calibrate the convergence threshold and compare at parent-technique level.
-- Extend continuous integration (`.github/workflows/ci.yml` runs the Python tests and the demo build; the dashboard build is still to add).
+- Extend continuous integration with the dashboard build and an integration job that starts the compose stack.
 - Link the `/intelligence` page into the dashboard's main navigation.
 
 ## License and author

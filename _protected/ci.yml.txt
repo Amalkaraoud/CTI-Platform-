@@ -1,0 +1,29 @@
+name: ci
+on:
+  push:
+  pull_request:
+jobs:
+  engines:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install pytest pydantic pyyaml beautifulsoup4
+      - name: Unit tests (each module is loaded by path, no running services required)
+        run: >
+          python -m pytest
+          onyx-core/tests/unit/test_engines_smoke.py
+          onyx-core/tests/unit/test_security_policy.py
+          onyx-core/tests/unit/test_ratelimit_audit.py
+          onyx-core/tests/unit/test_graph_queries.py
+          onyx-core/tests/unit/test_graph_sync.py
+          onyx-core/tests/unit/test_user_store.py
+          onyx-core/tests/unit/test_stix_custom_props.py
+          onyx-api/tests
+          onyx-analyzers/tests
+          onyx-connectors/tests
+          onyx-crawlers/tests
+          -q
+      - name: Demo builds
+        run: python demo/build_demo.py

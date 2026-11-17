@@ -42,35 +42,34 @@ celery.conf.update(
         "analysis": {"routing_key": "analysis"},
     },
     task_routes={
-        "onyx_crawlers.*": {"queue": "crawlers"},
-        "onyx_nlp.*": {"queue": "nlp"},
+        "onyx.crawlers.*": {"queue": "crawlers"},
+        "onyx.nlp.*": {"queue": "nlp"},
+        "onyx.api.*": {"queue": "default"},
         "onyx_analyzers.*": {"queue": "analysis"},
     },
     beat_schedule={
         "clearweb-pastebin-monitor": {
-            "task": "onyx_crawlers.clearweb.pastebin_monitor.scan",
+            "task": "onyx.crawlers.pastebin_scan",
             "schedule": 300.0,  # Every 5 minutes
         },
         "clearweb-github-monitor": {
-            "task": "onyx_crawlers.clearweb.github_monitor.scan",
+            "task": "onyx.crawlers.github_scan",
             "schedule": 600.0,  # Every 10 minutes
         },
         "dashboard-stats-refresh": {
-            "task": "onyx_api.tasks.refresh_dashboard_cache",
+            "task": "onyx.api.refresh_dashboard_cache",
             "schedule": 30.0,  # Every 30 seconds
         },
+        "siem-export": {
+            "task": "onyx.api.export_indicators",
+            "schedule": 900.0,  # Every 15 minutes; no-op until ONYX_EXPORT_* destinations are set
+        },
         "ioc-expiration-check": {
-            "task": "onyx_api.tasks.expire_stale_iocs",
+            "task": "onyx.api.expire_stale_iocs",
             "schedule": 3600.0,  # Every hour
         },
     },
 )
 
 # Auto-discover tasks from all ONYX packages
-celery.autodiscover_tasks([
-    "onyx_crawlers.darkweb",
-    "onyx_crawlers.clearweb",
-    "onyx_nlp.processors",
-    "onyx_analyzers",
-    "onyx_api.tasks",
-])
+celery.autodiscover_tasks(["onyx_api"], related_name="tasks")

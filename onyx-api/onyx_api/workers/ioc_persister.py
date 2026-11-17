@@ -38,6 +38,20 @@ _DECAY_BATCH_SIZE = 200
 _DECAY_RECALC_INTERVAL_SECONDS = 3600  # 1 hour
 
 
+async def _project_to_graph(event: dict[str, Any]) -> None:
+    """Project the IOC into Neo4j (relationship layer). Best effort: never blocks persistence."""
+    if os.environ.get("ONYX_GRAPH_SYNC_ENABLED", "true").lower() != "true":
+        return
+    try:
+        from onyx_core.graph_sync import sync_ioc
+        from onyx_core.services.neo4j import neo4j_service
+
+        # The Neo4j driver is synchronous: keep it off the event loop.
+        await asyncio.to_thread(sync_ioc, neo4j_service, event)
+    except Exception as exc:
+        logger.warning("ioc_persister.graph_sync_unavailable", error=str(exc))
+
+
 async def run_ioc_persister() -> None:
     """Boucle principale du worker de persistance."""
     logger.info("ioc_persister.starting", stream=STREAM_IOCS)
@@ -67,6 +81,7 @@ async def run_ioc_persister() -> None:
                     if doc_id:
                         await es_svc.index_document("onyx-iocs", doc_id, data)
                         logger.debug("ioc_persister.saved", doc_id=doc_id, msg_id=msg_id)
+                    await _project_to_graph(data)
                     await bus.acknowledge(STREAM_IOCS, GROUP_NAME, msg_id)
                 except Exception as save_err:
                     logger.error("ioc_persister.save_error", msg_id=msg_id, error=str(save_err))

@@ -82,3 +82,4 @@ onyx-dashboard/fix_quotes.js
 onyx-dashboard/git_history.txt
 onyx-dashboard/patch_dashboard.py
 onyx-dashboard/update_sci.js
+infra/nginx/certs/

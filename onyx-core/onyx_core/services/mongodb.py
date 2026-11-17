@@ -116,7 +116,7 @@ class MongoDBService:
         Returns:
             The STIX id of the created/updated object.
         """
-        data = stix_obj.model_dump(mode="json")
+        data = stix_obj.model_dump(mode="json", by_alias=True)
         data["modified"] = datetime.now(timezone.utc).isoformat()
 
         # Route to correct collection based on type
@@ -204,7 +204,7 @@ class MongoDBService:
 
         for obj in objects:
             coll_name = self._get_collection_for_type(obj.type)
-            data = obj.model_dump(mode="json")
+            data = obj.model_dump(mode="json", by_alias=True)
             data["modified"] = datetime.now(timezone.utc).isoformat()
             grouped[coll_name].append(data)
 
